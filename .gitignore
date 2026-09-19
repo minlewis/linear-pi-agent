@@ -3,5 +3,7 @@ dist/
 .pi-subagents/
 .env
 data/*.json
+data/*.log
+data/*.pid
 data/pi-sessions/
 *.log

@@ -4,11 +4,13 @@ import { isErrnoCode } from "./errors.js";
 
 export type KimiSessionStore = {
   get(agentSessionId: string): Promise<string | undefined>;
-  set(agentSessionId: string, kimiSessionId: string): Promise<void>;
+  getModel(agentSessionId: string): Promise<string | undefined>;
+  set(agentSessionId: string, kimiSessionId: string, model?: string): Promise<void>;
 };
 
 type StoredEntry = {
   kimiSessionId: string;
+  model?: string;
   updatedAt: string;
 };
 
@@ -24,9 +26,14 @@ export class FileKimiSessionStore implements KimiSessionStore {
     return data[agentSessionId]?.kimiSessionId;
   }
 
-  async set(agentSessionId: string, kimiSessionId: string): Promise<void> {
+  async getModel(agentSessionId: string): Promise<string | undefined> {
     const data = await this.read();
-    data[agentSessionId] = { kimiSessionId, updatedAt: new Date().toISOString() };
+    return data[agentSessionId]?.model;
+  }
+
+  async set(agentSessionId: string, kimiSessionId: string, model?: string): Promise<void> {
+    const data = await this.read();
+    data[agentSessionId] = { kimiSessionId, ...(model ? { model } : {}), updatedAt: new Date().toISOString() };
     await this.write(data);
   }
 

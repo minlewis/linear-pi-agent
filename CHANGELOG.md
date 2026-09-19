@@ -14,6 +14,7 @@ Changes since `v0.1.0`.
 ### Added
 
 - File-backed Kimi session store (`KIMI_SESSION_STORE_PATH`) with atomic writes and corrupt-file recovery.
+- Difficulty-based model routing: when `KIMI_MODEL_EASY`/`KIMI_MODEL_HARD` are set, each new agent session is classified by a short router-model call (`KIMI_MODEL_ROUTER`) as easy or hard and run with the matching model. The chosen model is persisted with the session mapping, so follow-ups reuse it. Classification failures fall back to `KIMI_MODEL` (or the CLI default).
 - `kimi-runner` with injectable spawn/session-store dependencies, plus unit tests and fake-kimi end-to-end tests covering created→response, follow-up resume, fresh-start fallback, and stop→kill.
 
 ### Removed

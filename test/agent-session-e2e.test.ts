@@ -37,10 +37,16 @@ type SpawnCall = { command: string; args: string[]; cwd: string };
 
 function memorySessionStore(initial?: Record<string, string>) {
   const data = new Map<string, string>(Object.entries(initial ?? {}));
+  const models = new Map<string, string>();
   return {
     data,
+    models,
     get: async (id: string) => data.get(id),
-    set: async (id: string, sessionId: string) => void data.set(id, sessionId),
+    getModel: async (id: string) => models.get(id),
+    set: async (id: string, sessionId: string, model?: string) => {
+      data.set(id, sessionId);
+      if (model) models.set(id, model);
+    },
   };
 }
 
@@ -109,6 +115,10 @@ before(() => {
   process.env.KIMI_WORKDIR = "/tmp/kimi-workdir";
   process.env.KIMI_COMMAND = "kimi";
   process.env.KIMI_TIMEOUT_MS = "60000";
+  // Keep model routing disabled here (empty survives dotenv); test/model-routing.test.ts covers it.
+  process.env.KIMI_MODEL_ROUTER = "";
+  process.env.KIMI_MODEL_EASY = "";
+  process.env.KIMI_MODEL_HARD = "";
 });
 
 test("created webhook drives a fake kimi run end to end", async () => {
