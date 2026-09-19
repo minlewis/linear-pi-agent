@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { config } from "./config.js";
+import { isErrnoCode } from "./errors.js";
 import { FileKimiSessionStore, type KimiSessionStore } from "./kimi-session-store.js";
 import { handleKimiLine, ProgressReporter, redact } from "./progress.js";
 import type { AgentSessionWebhook } from "./session-runner.js";
@@ -45,9 +46,13 @@ function guidanceText(payload: AgentSessionWebhook): string {
   return `\n\nLinear guidance:\n${rules.map((rule) => `- ${rule}`).join("\n")}`;
 }
 
+function promptContextOf(payload: AgentSessionWebhook): string | undefined {
+  return payload.promptContext ?? payload.agentSession?.promptContext;
+}
+
 export function buildKimiPrompt(payload: AgentSessionWebhook): string {
   const issue = payload.agentSession?.issue;
-  const promptContext = payload.promptContext ?? payload.agentSession?.promptContext;
+  const promptContext = promptContextOf(payload);
 
   return [
     "You are running as Kimi, a Linear custom agent powered by Kimi Code.",
@@ -77,7 +82,7 @@ export function buildKimiFollowUpPrompt(payload: AgentSessionWebhook): string {
     ].join("\n");
   }
 
-  const promptContext = payload.promptContext ?? payload.agentSession?.promptContext;
+  const promptContext = promptContextOf(payload);
   if (promptContext) {
     return [
       "Linear follow-up context:",
@@ -121,20 +126,6 @@ function killChild(child: ChildProcess): void {
   force.unref();
 }
 
-function assistantTextFromLine(line: string): string | undefined {
-  let event: unknown;
-  try {
-    event = JSON.parse(line);
-  } catch {
-    return undefined;
-  }
-  if (!event || typeof event !== "object" || Array.isArray(event)) return undefined;
-  const record = event as Record<string, unknown>;
-  if (record.role !== "assistant") return undefined;
-  if (record.tool_calls) return undefined;
-  return typeof record.content === "string" && record.content.trim() ? record.content : undefined;
-}
-
 export async function runKimi(payload: AgentSessionWebhook, deps: KimiRunnerDeps = {}): Promise<KimiRunResult> {
   const agentSessionId = payload.agentSession?.id;
   if (!agentSessionId) throw new Error("agentSession.id is required to run kimi");
@@ -155,10 +146,11 @@ export async function runKimi(payload: AgentSessionWebhook, deps: KimiRunnerDeps
   ];
 
   const startedAt = nowMs();
-  const elapsedMs = () => Math.max(0, Math.round(nowMs() - startedAt));
+  const elapsed = () => Math.max(0, Math.round(nowMs() - startedAt));
   const reporter = new ProgressReporter({ agentSessionId });
-  let finalText = "";
+  let latestAssistantText = "";
   let capturedSessionId: string | undefined;
+  let persistPromise: Promise<void> | undefined;
   let stderr = "";
   let spawnError: Error | undefined;
   let timedOut = false;
@@ -175,13 +167,29 @@ export async function runKimi(payload: AgentSessionWebhook, deps: KimiRunnerDeps
       stderr: "",
       outputText: "",
       summary: "",
-      elapsedMs: elapsedMs(),
+      elapsedMs: elapsed(),
     };
     result.summary = spawnFailureSummary(error);
     return result;
   }
 
   activeRuns.set(agentSessionId, { child, kill: () => killChild(child) });
+
+  const processLine = (line: string): void => {
+    const event = handleKimiLine(line, reporter);
+    if (event.sessionId) {
+      capturedSessionId = event.sessionId;
+      persistPromise = sessionStore.set(agentSessionId, event.sessionId).catch((error: Error) => {
+        console.error("failed to persist kimi session mapping", { agentSessionId, message: error.message });
+      });
+    }
+    if (event.assistantText) {
+      // Publish the superseded text as an intermediate thought; the newest text
+      // stays buffered as the candidate final answer.
+      if (latestAssistantText) reporter.thought(latestAssistantText);
+      latestAssistantText = event.assistantText;
+    }
+  };
 
   let pendingLine = "";
   const completion = new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((resolve) => {
@@ -214,18 +222,6 @@ export async function runKimi(payload: AgentSessionWebhook, deps: KimiRunnerDeps
     child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => finish(code, signal));
   });
 
-  const processLine = (line: string): void => {
-    const sessionId = handleKimiLine(line, reporter);
-    if (sessionId) {
-      capturedSessionId = sessionId;
-      void sessionStore.set(agentSessionId, sessionId).catch((error: Error) => {
-        console.error("failed to persist kimi session mapping", { agentSessionId, message: error.message });
-      });
-    }
-    const text = assistantTextFromLine(line);
-    if (text) finalText = text;
-  };
-
   timeout = setTimeout(() => {
     timedOut = true;
     killChild(child);
@@ -237,6 +233,7 @@ export async function runKimi(payload: AgentSessionWebhook, deps: KimiRunnerDeps
     const exit = await completion;
 
     if (pendingLine.trim()) processLine(pendingLine);
+    await persistPromise;
     await reporter.flush();
 
     const result: KimiRunResult = {
@@ -244,9 +241,9 @@ export async function runKimi(payload: AgentSessionWebhook, deps: KimiRunnerDeps
       signal: exit.signal,
       timedOut,
       stderr,
-      outputText: finalText,
+      outputText: latestAssistantText,
       summary: "",
-      elapsedMs: elapsedMs(),
+      elapsedMs: elapsed(),
       kimiSessionId: capturedSessionId,
     };
     result.summary = spawnError ? spawnFailureSummary(spawnError) : summarizeKimiResult(result);
@@ -261,7 +258,7 @@ export async function runKimi(payload: AgentSessionWebhook, deps: KimiRunnerDeps
 
 function spawnFailureSummary(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  const isMissing = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+  const isMissing = isErrnoCode(error, "ENOENT");
   const detail = isMissing
     ? `The Kimi Code CLI ("${config.KIMI_COMMAND}") was not found. Install it on the host and run \`kimi login\` as the service user. (${message})`
     : `kimi failed to start: ${message}`;

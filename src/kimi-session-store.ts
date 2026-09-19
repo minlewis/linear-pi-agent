@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isErrnoCode } from "./errors.js";
 
 export type KimiSessionStore = {
   get(agentSessionId: string): Promise<string | undefined>;
@@ -12,7 +13,7 @@ type StoredEntry = {
 };
 
 function isNotFound(error: unknown): boolean {
-  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+  return isErrnoCode(error, "ENOENT");
 }
 
 export class FileKimiSessionStore implements KimiSessionStore {

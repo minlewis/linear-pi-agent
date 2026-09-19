@@ -44,6 +44,36 @@ function memorySessionStore(initial?: Record<string, string>) {
   };
 }
 
+type SentActivity = { type: string; body?: string };
+
+// Wires a fake kimi process into runKimi and collects spawned argv plus posted
+// Linear activities, for driving handleAgentSessionWebhook end to end.
+function wireRun(options: {
+  runKimi: (payload: never, deps: { spawnProcess: unknown; sessionStore: unknown }) => Promise<unknown>;
+  store: ReturnType<typeof memorySessionStore>;
+  sent: SentActivity[];
+  childFor?: (spawnIndex: number) => FakeChild;
+}) {
+  const calls: SpawnCall[] = [];
+  const fakes = new Map<number, FakeChild>();
+  const spawnProcess = ((command: string, args: string[], opts: { cwd: string }) => {
+    const fake = options.childFor?.(calls.length) ?? fakeChild();
+    fakes.set(calls.length, fake);
+    calls.push({ command, args, cwd: opts.cwd });
+    return fake.child;
+  }) as never;
+
+  return {
+    calls,
+    fakes,
+    run: (payload: never) =>
+      options.runKimi(payload, { spawnProcess, sessionStore: options.store }) as Promise<unknown>,
+    postActivity: (async (_id: string, content: SentActivity) => {
+      options.sent.push(content);
+    }) as never,
+  };
+}
+
 async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
   const startedAt = Date.now();
   while (!condition()) {
@@ -84,33 +114,27 @@ before(() => {
 test("created webhook drives a fake kimi run end to end", async () => {
   const { handleAgentSessionWebhook } = await import("../src/session-runner.js");
   const { runKimi } = await import("../src/kimi-runner.js");
-  const fake = fakeChild();
-  const calls: SpawnCall[] = [];
   const store = memorySessionStore();
-  const sent: Array<{ type: string; body?: string }> = [];
-
-  const spawnProcess = ((command: string, args: string[], options: { cwd: string }) => {
-    calls.push({ command, args, cwd: options.cwd });
-    return fake.child;
-  }) as never;
-
-  const run = (payload: never) => runKimi(payload, { spawnProcess, sessionStore: store });
-  const postActivity = async (_id: string, content: { type: string; body?: string }) => {
-    sent.push(content);
-  };
+  const sent: SentActivity[] = [];
+  const wire = wireRun({ runKimi: runKimi as never, store, sent });
 
   void handleAgentSessionWebhook(
     { action: "created", agentSession: { id: "agent-session-1", issue: { identifier: "FOO-1", title: "Fix" } } },
-    { run: run as never, postActivity: postActivity as never },
+    { run: wire.run, postActivity: wire.postActivity },
   );
-  setTimeout(() => emitSuccessfulRun(fake, "session_e2e"), 0);
+  setTimeout(() => wire.fakes.get(0) && emitSuccessfulRun(wire.fakes.get(0)!, "session_e2e"), 0);
 
   await waitFor(() => sent.some((entry) => entry.type === "response"));
 
-  assert.deepEqual(calls[0].args.filter((arg) => arg === "-S"), []);
+  assert.deepEqual(wire.calls[0].args.filter((arg) => arg === "-S"), []);
   assert.equal(store.data.get("agent-session-1"), "session_e2e");
   assert.equal(sent[0]?.type, "thought");
   assert.match(sent[0].body ?? "", /started working/);
+  assert.equal(
+    sent.some((entry) => entry.type === "thought" && (entry.body ?? "").includes(FINAL_TEXT)),
+    false,
+    "final answer must appear only as the response activity",
+  );
   const response = sent[sent.length - 1];
   assert.equal(response.type, "response");
   assert.match(response.body ?? "", /Implemented the fix/);
@@ -121,91 +145,57 @@ test("prompted webhook resumes the stored kimi session", async () => {
   const { handleAgentSessionWebhook } = await import("../src/session-runner.js");
   const { runKimi } = await import("../src/kimi-runner.js");
   const store = memorySessionStore({ "agent-session-2": "session_stored" });
-  const sent: Array<{ type: string; body?: string }> = [];
-  const calls: SpawnCall[] = [];
-  const fakes = new Map<number, FakeChild>();
-  let spawnCount = 0;
-
-  const spawnProcess = ((command: string, args: string[], options: { cwd: string }) => {
-    const fake = fakeChild();
-    fakes.set(spawnCount, fake);
-    calls.push({ command, args, cwd: options.cwd });
-    return fake.child;
-  }) as never;
-
-  const run = (payload: never) => runKimi(payload, { spawnProcess, sessionStore: store });
-  const postActivity = async (_id: string, content: { type: string; body?: string }) => {
-    sent.push(content);
-  };
+  const sent: SentActivity[] = [];
+  const wire = wireRun({ runKimi: runKimi as never, store, sent });
 
   void handleAgentSessionWebhook(
     { action: "prompted", agentActivity: { content: { body: "Please also update docs." } }, agentSession: { id: "agent-session-2" } },
-    { run: run as never, postActivity: postActivity as never },
+    { run: wire.run, postActivity: wire.postActivity },
   );
-  setTimeout(() => emitSuccessfulRun(fakes.get(0)!, "session_stored"), 0);
+  setTimeout(() => wire.fakes.get(0) && emitSuccessfulRun(wire.fakes.get(0)!, "session_stored"), 0);
 
   await waitFor(() => sent.some((entry) => entry.type === "response"));
 
-  const resumeAt = calls[0].args.indexOf("-S");
+  const resumeAt = wire.calls[0].args.indexOf("-S");
   assert.ok(resumeAt >= 0);
-  assert.equal(calls[0].args[resumeAt + 1], "session_stored");
+  assert.equal(wire.calls[0].args[resumeAt + 1], "session_stored");
 });
 
 test("prompted webhook without a stored session starts fresh", async () => {
   const { handleAgentSessionWebhook } = await import("../src/session-runner.js");
   const { runKimi } = await import("../src/kimi-runner.js");
-  const fake = fakeChild();
-  const calls: SpawnCall[] = [];
   const store = memorySessionStore();
-  const sent: Array<{ type: string }> = [];
-
-  const spawnProcess = ((command: string, args: string[], options: { cwd: string }) => {
-    calls.push({ command, args, cwd: options.cwd });
-    return fake.child;
-  }) as never;
-
-  const run = (payload: never) => runKimi(payload, { spawnProcess, sessionStore: store });
-  const postActivity = async (_id: string, content: { type: string }) => {
-    sent.push(content);
-  };
+  const sent: SentActivity[] = [];
+  const wire = wireRun({ runKimi: runKimi as never, store, sent });
 
   void handleAgentSessionWebhook(
     { action: "prompted", agentActivity: { content: { body: "Follow up." } }, agentSession: { id: "agent-session-3" } },
-    { run: run as never, postActivity: postActivity as never },
+    { run: wire.run, postActivity: wire.postActivity },
   );
-  setTimeout(() => emitSuccessfulRun(fake, "session_fresh"), 0);
+  setTimeout(() => wire.fakes.get(0) && emitSuccessfulRun(wire.fakes.get(0)!, "session_fresh"), 0);
 
   await waitFor(() => sent.some((entry) => entry.type === "response"));
-  assert.deepEqual(calls[0].args.filter((arg) => arg === "-S"), []);
+  assert.deepEqual(wire.calls[0].args.filter((arg) => arg === "-S"), []);
 });
 
 test("stop webhook kills the running fake kimi process", async () => {
   const { handleAgentSessionWebhook } = await import("../src/session-runner.js");
   const { runKimi } = await import("../src/kimi-runner.js");
-  const fake = fakeChild();
   const store = memorySessionStore();
-  const sent: Array<{ type: string; body?: string }> = [];
-  const calls: SpawnCall[] = [];
-
-  const spawnProcess = ((command: string, args: string[], options: { cwd: string }) => {
-    calls.push({ command, args, cwd: options.cwd });
-    return fake.child;
-  }) as never;
-  const run = (payload: never) => runKimi(payload, { spawnProcess, sessionStore: store });
-  const postActivity = async (_id: string, content: { type: string; body?: string }) => {
-    sent.push(content);
-  };
+  const sent: SentActivity[] = [];
+  const fake = fakeChild();
+  const wire = wireRun({ runKimi: runKimi as never, store, sent, childFor: () => fake });
 
   void handleAgentSessionWebhook(
     { action: "created", agentSession: { id: "agent-session-4" } },
-    { run: run as never, postActivity: postActivity as never },
+    { run: wire.run, postActivity: wire.postActivity },
   );
   setTimeout(() => fake.emitLine(JSON.stringify({ role: "assistant", content: "working on it" })), 0);
 
-  await waitFor(() => calls.length === 1);
+  await waitFor(() => wire.calls.length === 1);
   void handleAgentSessionWebhook(
     { action: "prompted", agentActivity: { content: { body: "stop" } }, agentSession: { id: "agent-session-4" } },
-    { postActivity: postActivity as never },
+    { postActivity: wire.postActivity },
   );
 
   await waitFor(() => sent.some((entry) => entry.type === "error" && /Stopped by user/.test(entry.body ?? "")));

@@ -213,7 +213,7 @@ export class ProgressReporter {
     this.queue({ type: "thought", body: `Running ${display}`, dedupeKey: `tool-start:${toolCallId}` });
   }
 
-  toolEnded(toolCallId: string, toolName: string, isError: boolean): void {
+  toolEnded(toolCallId: string, toolName: string | undefined, isError: boolean): void {
     const run = this.toolRuns.get(toolCallId);
     this.toolRuns.delete(toolCallId);
     const name = toolName || run?.toolName || "tool";
@@ -358,27 +358,33 @@ function isErrorToolResult(content: unknown): boolean {
 
 // Handles one line of Kimi Code `stream-json` (NDJSON) output. Malformed lines
 // and unknown event shapes are ignored for forward compatibility. Returns the
-// kimi session id when the line is a session.resume_hint meta event.
-export function handleKimiLine(line: string, reporter: ProgressReporter): string | undefined {
+// kimi session id for session.resume_hint meta events and the assistant text
+// for assistant content events; the caller decides which texts are final.
+export type KimiLineResult = {
+  sessionId?: string;
+  assistantText?: string;
+};
+
+export function handleKimiLine(line: string, reporter: ProgressReporter): KimiLineResult {
   const trimmed = line.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) return {};
 
   let event: unknown;
   try {
     event = JSON.parse(trimmed);
   } catch {
-    return undefined;
+    return {};
   }
-  if (!event || typeof event !== "object" || Array.isArray(event)) return undefined;
+  if (!event || typeof event !== "object" || Array.isArray(event)) return {};
 
   const record = event as Record<string, unknown>;
   const role = typeof record.role === "string" ? record.role : undefined;
 
   if (role === "meta") {
     if (record.type === "session.resume_hint" && typeof record.session_id === "string") {
-      return record.session_id;
+      return { sessionId: record.session_id };
     }
-    return undefined;
+    return {};
   }
 
   if (role === "assistant") {
@@ -388,15 +394,14 @@ export function handleKimiLine(line: string, reporter: ProgressReporter): string
     }
 
     const text = kimiTextContent(record.content).trim();
-    if (text) reporter.thought(text);
-    return undefined;
+    return text ? { assistantText: text } : {};
   }
 
   if (role === "tool") {
     const toolCallId = typeof record.tool_call_id === "string" ? record.tool_call_id : undefined;
-    if (toolCallId) reporter.toolEnded(toolCallId, "", isErrorToolResult(record.content));
-    return undefined;
+    if (toolCallId) reporter.toolEnded(toolCallId, undefined, isErrorToolResult(record.content));
+    return {};
   }
 
-  return undefined;
+  return {};
 }

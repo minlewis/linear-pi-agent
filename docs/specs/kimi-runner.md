@@ -149,20 +149,24 @@ KIMI_COMMAND [-S <kimiSessionId>] -p <prompt> --output-format stream-json [-m <K
 with `cwd = KIMI_WORKDIR`. `-S` is included only when a stored Kimi session ID
 exists for this Linear agent session and the webhook is a follow-up.
 
-### NDJSON parsing rules (`handleKimiEvent`)
+### NDJSON parsing rules (`handleKimiLine`)
 
-- Read stdout line by line; blank lines and lines that fail `JSON.parse` are
-  ignored (logged at debug level).
-- Unknown `role`/`type` combinations are ignored for forward compatibility.
+- `handleKimiLine(line, reporter)` handles one raw stdout line: blank/unparseable
+  lines and unknown `role`/`type` combinations are ignored (logged at debug
+  level) for forward compatibility. It returns `{ sessionId?, assistantText? }`.
 - `assistant.tool_calls[]` → `ProgressReporter.toolStarted(id, name, args)`
   where `args` is the parsed `function.arguments` JSON (unparseable → `{}`).
-- `role: "tool"` → `ProgressReporter.toolEnded(tool_call_id, name, isError)`.
+- `role: "tool"` → `ProgressReporter.toolEnded(tool_call_id, undefined, isError)`.
   `isError` detection is heuristic: true when the content starts with
-  `error`-like prefixes; otherwise false (see Assumptions).
-- Intermediate `assistant.content` → `ProgressReporter.thought(truncate(text))`.
-- Final `assistant.content` → `KimiRunResult.outputText` → final `response`.
-- `meta.type === "session.resume_hint"` → capture `session_id`, persist via
-  the session store for the current Linear `agentSession.id`.
+  `error`-like prefixes; otherwise false (see Assumptions). The reporter falls
+  back to the name recorded at tool start.
+- `assistant.content` → returned as `assistantText`, not posted. The runner
+  publishes each superseded text as an intermediate `thought` and keeps the
+  newest text buffered as the final answer (`KimiRunResult.outputText` → final
+  `response`), so the final answer appears exactly once.
+- `meta.type === "session.resume_hint"` → returned as `sessionId`; the runner
+  persists it via the session store for the current Linear `agentSession.id`
+  and awaits the write before returning the result.
 
 ### Session store (`src/kimi-session-store.ts`)
 
@@ -204,7 +208,7 @@ order because later slices import earlier ones:
    `config.test.ts`, `.env.example`. Fails until code compiles without `PI_*`.
 2. **Session store** — `kimi-session-store.ts` + tests (get/set, atomic write,
    corrupt file recovery).
-3. **NDJSON event handling** — `handleKimiEvent` in `progress.ts` (replacing
+3. **NDJSON event handling** — `handleKimiLine` in `progress.ts` (replacing
    `handleSdkEvent`) + tests with recorded fixtures, including malformed lines
    and unknown event types.
 4. **kimi-runner** — prompt builders, `runKimi` with injected fake spawn
@@ -226,7 +230,8 @@ order because later slices import earlier ones:
 - `npm run typecheck`, `npm run build`, `npm test` all pass.
 - No source file imports `@earendil-works/pi-coding-agent`; the dependency is
   absent from `package.json` and the lockfile.
-- No `PI_*` environment variable remains in `src/`, `.env.example`, or docs.
+- No `PI_*` environment variable remains in `src/`, `.env.example`,
+  `README.md`, or `INSTALL.md` (CHANGELOG historical entries are exempt).
 - The fake-kimi end-to-end test demonstrates all four behaviors: created →
   response activity, prompted with stored session → resume argv, prompted
   without stored session → fresh run, stop → killed process + error activity.

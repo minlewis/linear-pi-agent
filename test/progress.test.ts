@@ -402,7 +402,7 @@ test("handleKimiLine posts tool progress for assistant tool_calls", async () => 
   const { sent, send } = sentCollector();
   const reporter = new ProgressReporter({ agentSessionId: "session", debounceMs: 1, send });
 
-  const sessionId = handleKimiLine(JSON.stringify({
+  const result = handleKimiLine(JSON.stringify({
     role: "assistant",
     tool_calls: [{
       type: "function",
@@ -412,7 +412,7 @@ test("handleKimiLine posts tool progress for assistant tool_calls", async () => 
   }), reporter);
   await reporter.flush();
 
-  assert.equal(sessionId, undefined);
+  assert.deepEqual(result, {});
   assert.deepEqual(sent, [{ type: "thought", body: "Running Write: hello.txt" }]);
 });
 
@@ -429,17 +429,19 @@ test("handleKimiLine ignores unparseable and unknown lines", async () => {
   assert.deepEqual(sent, []);
 });
 
-test("handleKimiLine posts a truncated thought for intermediate assistant text", async () => {
+test("handleKimiLine returns assistant text without posting it", async () => {
   const { handleKimiLine, ProgressReporter } = await progressModule();
   const { sent, send } = sentCollector();
   const reporter = new ProgressReporter({ agentSessionId: "session", debounceMs: 1, send });
 
-  handleKimiLine(JSON.stringify({ role: "assistant", content: `Working on it ${"x".repeat(300)}` }), reporter);
+  const result = handleKimiLine(
+    JSON.stringify({ role: "assistant", content: `Working on it ${"x".repeat(300)}` }),
+    reporter,
+  );
   await reporter.flush();
 
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0]?.type, "thought");
-  assert.equal(sent[0]?.type === "thought" ? sent[0].body.length : 0, 220);
+  assert.equal(result.assistantText, `Working on it ${"x".repeat(300)}`);
+  assert.deepEqual(sent, []);
 });
 
 test("handleKimiLine reports completion for long-running tools", async () => {
@@ -509,13 +511,13 @@ test("handleKimiLine returns the kimi session id from session.resume_hint", asyn
   const { sent, send } = sentCollector();
   const reporter = new ProgressReporter({ agentSessionId: "session", debounceMs: 1, send });
 
-  const sessionId = handleKimiLine(JSON.stringify({
+  const result = handleKimiLine(JSON.stringify({
     role: "meta",
     type: "session.resume_hint",
     session_id: "session_abc",
   }), reporter);
   await reporter.flush();
 
-  assert.equal(sessionId, "session_abc");
+  assert.equal(result.sessionId, "session_abc");
   assert.deepEqual(sent, []);
 });
