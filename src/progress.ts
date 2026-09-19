@@ -217,11 +217,12 @@ export class ProgressReporter {
   toolEnded(toolCallId: string, toolName: string, isError: boolean): void {
     const run = this.toolRuns.get(toolCallId);
     this.toolRuns.delete(toolCallId);
+    const name = toolName || run?.toolName || "tool";
 
     if (isError) {
       this.queue({
         type: "thought",
-        body: `${toolName} reported an error; Pi is adjusting.`,
+        body: `${name} reported an error; Kimi is adjusting.`,
         dedupeKey: `tool-error:${toolCallId}`,
       });
       return;
@@ -261,7 +262,7 @@ export class ProgressReporter {
     const elapsedMinutes = Math.max(1, Math.round((Date.now() - this.heartbeatStartedAt) / 60_000));
     this.queue({
       type: "thought",
-      body: `Pi is still working (${elapsedMinutes} min).`,
+      body: `Kimi is still working (${elapsedMinutes} min).`,
       dedupeKey: `heartbeat:${elapsedMinutes}`,
     });
   }
@@ -339,4 +340,92 @@ export function handleSdkEvent(event: AgentSessionEvent, reporter: ProgressRepor
     case "queue_update":
       break;
   }
+}
+
+type KimiToolCall = {
+  type?: string;
+  id?: string;
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+};
+
+function kimiToolCalls(event: Record<string, unknown>): KimiToolCall[] {
+  if (!Array.isArray(event.tool_calls)) return [];
+  return event.tool_calls.filter(
+    (call): call is KimiToolCall => Boolean(call) && typeof call === "object",
+  );
+}
+
+function parseToolArguments(raw: string | undefined): unknown {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function kimiTextContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .flatMap((part) => {
+      if (!part || typeof part !== "object") return [];
+      const maybeText = (part as { text?: unknown }).text;
+      return typeof maybeText === "string" ? [maybeText] : [];
+    })
+    .join("\n");
+}
+
+function isErrorToolResult(content: unknown): boolean {
+  const text = kimiTextContent(content).trimStart();
+  return /^(error|exception|failed|failure)\b/i.test(text);
+}
+
+// Handles one line of Kimi Code `stream-json` (NDJSON) output. Malformed lines
+// and unknown event shapes are ignored for forward compatibility. Returns the
+// kimi session id when the line is a session.resume_hint meta event.
+export function handleKimiLine(line: string, reporter: ProgressReporter): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) return undefined;
+
+  let event: unknown;
+  try {
+    event = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (!event || typeof event !== "object" || Array.isArray(event)) return undefined;
+
+  const record = event as Record<string, unknown>;
+  const role = typeof record.role === "string" ? record.role : undefined;
+
+  if (role === "meta") {
+    if (record.type === "session.resume_hint" && typeof record.session_id === "string") {
+      return record.session_id;
+    }
+    return undefined;
+  }
+
+  if (role === "assistant") {
+    for (const call of kimiToolCalls(record)) {
+      if (call.type !== "function" || !call.id) continue;
+      reporter.toolStarted(call.id, call.function?.name ?? "tool", parseToolArguments(call.function?.arguments));
+    }
+
+    const text = kimiTextContent(record.content).trim();
+    if (text) reporter.thought(text);
+    return undefined;
+  }
+
+  if (role === "tool") {
+    const toolCallId = typeof record.tool_call_id === "string" ? record.tool_call_id : undefined;
+    if (toolCallId) reporter.toolEnded(toolCallId, "", isErrorToolResult(record.content));
+    return undefined;
+  }
+
+  return undefined;
 }

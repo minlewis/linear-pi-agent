@@ -244,7 +244,7 @@ test("failed tools still report an adjustment message", async () => {
 
   assert.deepEqual(sent, [
     { type: "thought", body: "Running bash: npm test" },
-    { type: "thought", body: "bash reported an error; Pi is adjusting." },
+    { type: "thought", body: "bash reported an error; Kimi is adjusting." },
   ]);
 });
 
@@ -379,7 +379,7 @@ test("heartbeat sends after quiet interval and skips when pending exists", async
 
   assert.equal(sent.length, 3);
   assert.equal(sent[2]?.type, "thought");
-  assert.match(sent[2]?.type === "thought" ? sent[2].body : "", /Pi is still working/);
+  assert.match(sent[2]?.type === "thought" ? sent[2].body : "", /Kimi is still working/);
 });
 
 test("stopHeartbeat prevents later heartbeat posts", async () => {
@@ -393,4 +393,127 @@ test("stopHeartbeat prevents later heartbeat posts", async () => {
   await reporter.flush();
 
   assert.equal(sent.length, 0);
+});
+
+test("handleKimiLine posts tool progress for assistant tool_calls", async () => {
+  const { handleKimiLine, ProgressReporter } = await progressModule();
+  const { sent, send } = sentCollector();
+  const reporter = new ProgressReporter({ agentSessionId: "session", debounceMs: 1, send });
+
+  const sessionId = handleKimiLine(JSON.stringify({
+    role: "assistant",
+    tool_calls: [{
+      type: "function",
+      id: "tool_1",
+      function: { name: "Write", arguments: JSON.stringify({ path: "hello.txt" }) },
+    }],
+  }), reporter);
+  await reporter.flush();
+
+  assert.equal(sessionId, undefined);
+  assert.deepEqual(sent, [{ type: "thought", body: "Running Write: hello.txt" }]);
+});
+
+test("handleKimiLine ignores unparseable and unknown lines", async () => {
+  const { handleKimiLine, ProgressReporter } = await progressModule();
+  const { sent, send } = sentCollector();
+  const reporter = new ProgressReporter({ agentSessionId: "session", debounceMs: 1, send });
+
+  handleKimiLine("", reporter);
+  handleKimiLine("not json {", reporter);
+  handleKimiLine(JSON.stringify({ role: "future_role", content: "mystery" }), reporter);
+  await reporter.flush();
+
+  assert.deepEqual(sent, []);
+});
+
+test("handleKimiLine posts a truncated thought for intermediate assistant text", async () => {
+  const { handleKimiLine, ProgressReporter } = await progressModule();
+  const { sent, send } = sentCollector();
+  const reporter = new ProgressReporter({ agentSessionId: "session", debounceMs: 1, send });
+
+  handleKimiLine(JSON.stringify({ role: "assistant", content: `Working on it ${"x".repeat(300)}` }), reporter);
+  await reporter.flush();
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.type, "thought");
+  assert.equal(sent[0]?.type === "thought" ? sent[0].body.length : 0, 220);
+});
+
+test("handleKimiLine reports completion for long-running tools", async () => {
+  const { handleKimiLine, ProgressReporter } = await progressModule();
+  const { sent, send } = sentCollector();
+  let now = 0;
+  const reporter = new ProgressReporter({
+    agentSessionId: "session",
+    debounceMs: 1,
+    longToolMs: 30_000,
+    nowMs: () => now,
+    send,
+  });
+
+  handleKimiLine(JSON.stringify({
+    role: "assistant",
+    tool_calls: [{
+      type: "function",
+      id: "tool_1",
+      function: { name: "bash", arguments: JSON.stringify({ command: "npm test" }) },
+    }],
+  }), reporter);
+  await reporter.flush();
+  now = 31_000;
+  handleKimiLine(JSON.stringify({ role: "tool", tool_call_id: "tool_1", content: "ok" }), reporter);
+  await reporter.flush();
+
+  assert.deepEqual(sent, [
+    { type: "thought", body: "Running bash: npm test" },
+    { type: "thought", body: "Finished bash: npm test after 31s." },
+  ]);
+});
+
+test("handleKimiLine reports tool errors and skips completion notices for them", async () => {
+  const { handleKimiLine, ProgressReporter } = await progressModule();
+  const { sent, send } = sentCollector();
+  let now = 0;
+  const reporter = new ProgressReporter({
+    agentSessionId: "session",
+    debounceMs: 1,
+    longToolMs: 1,
+    nowMs: () => now,
+    send,
+  });
+
+  handleKimiLine(JSON.stringify({
+    role: "assistant",
+    tool_calls: [{
+      type: "function",
+      id: "tool_1",
+      function: { name: "bash", arguments: JSON.stringify({ command: "npm test" }) },
+    }],
+  }), reporter);
+  await reporter.flush();
+  now = 5_000;
+  handleKimiLine(JSON.stringify({ role: "tool", tool_call_id: "tool_1", content: "Error: npm failed" }), reporter);
+  await reporter.flush();
+
+  assert.deepEqual(sent, [
+    { type: "thought", body: "Running bash: npm test" },
+    { type: "thought", body: "bash reported an error; Kimi is adjusting." },
+  ]);
+});
+
+test("handleKimiLine returns the kimi session id from session.resume_hint", async () => {
+  const { handleKimiLine, ProgressReporter } = await progressModule();
+  const { sent, send } = sentCollector();
+  const reporter = new ProgressReporter({ agentSessionId: "session", debounceMs: 1, send });
+
+  const sessionId = handleKimiLine(JSON.stringify({
+    role: "meta",
+    type: "session.resume_hint",
+    session_id: "session_abc",
+  }), reporter);
+  await reporter.flush();
+
+  assert.equal(sessionId, "session_abc");
+  assert.deepEqual(sent, []);
 });
