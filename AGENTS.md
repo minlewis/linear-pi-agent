@@ -1,11 +1,3 @@
-## Active initiative: Kimi Code runner
-
-This repo is being converted from a pi runner to a Kimi Code runner (Linear Agent Session → `kimi` CLI subprocess). When touching runner, config, progress, or session code, read the spec first: `docs/specs/kimi-runner.md` is the single source of truth for scope, pinned interfaces (`KIMI_*` env schema, kimi-runner exports, NDJSON event mapping), dependency order, and acceptance criteria. Implementation slices are tracked as GitHub issues #2–#8 under epic #1 on the fork `minlewis/linear-pi-agent`; keep issue checkboxes/state in sync as slices land.
-
-Remotes: `origin` points at the upstream `hiasinho/linear-pi-agent`; the user's fork is `minlewis/linear-pi-agent`. Issues, pushes, and PRs target the fork unless the user says otherwise.
-
-Delete this section once the migration is complete and issues #1–#8 are closed.
-
 ## Agent skills
 
 ### PRDs
