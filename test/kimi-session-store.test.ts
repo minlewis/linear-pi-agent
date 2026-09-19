@@ -92,3 +92,25 @@ test("mappings for different agent sessions do not collide", async () => {
   assert.equal(await reloaded.get("agent-session-1"), "session_a");
   assert.equal(await reloaded.get("agent-session-2"), "session_b");
 });
+
+test("set stores an optional model and getModel returns it", async () => {
+  const { FileKimiSessionStore } = await storeModule();
+  const file = path.join(dir, "sessions.json");
+  const store = new FileKimiSessionStore(file);
+
+  await store.set("agent-session-1", "session_abc", "kimi-code/k3");
+
+  const reloaded = new FileKimiSessionStore(file);
+  assert.equal(await reloaded.get("agent-session-1"), "session_abc");
+  assert.equal(await reloaded.getModel("agent-session-1"), "kimi-code/k3");
+});
+
+test("getModel returns undefined for legacy entries without a model", async () => {
+  const { FileKimiSessionStore } = await storeModule();
+  const file = path.join(dir, "sessions.json");
+  const store = new FileKimiSessionStore(file);
+
+  await store.set("agent-session-1", "session_abc");
+
+  assert.equal(await store.getModel("agent-session-1"), undefined);
+});

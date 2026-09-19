@@ -121,6 +121,8 @@ Important values:
 - `KIMI_WORKDIR` — the repository Kimi Code should work in
 - `KIMI_COMMAND` — Kimi CLI executable; defaults to `kimi`
 - `KIMI_MODEL` — optional model alias passed as `kimi -m`
+- `KIMI_MODEL_ROUTER` — model alias for the difficulty classification call used when model routing is enabled
+- `KIMI_MODEL_EASY` / `KIMI_MODEL_HARD` — enable difficulty-based model routing: each new agent session is classified by a short router-model call as easy or hard and run with the matching model; follow-ups reuse the model chosen at creation; classification failures fall back to `KIMI_MODEL` (or the CLI default)
 - `KIMI_SESSION_STORE_PATH` — persisted Linear → Kimi session mapping
 - `KIMI_PROGRESS_DEBOUNCE_MS` — minimum delay between Linear progress activities
 - `KIMI_PROGRESS_HEARTBEAT_MS` — quiet interval before posting a "still working" progress heartbeat

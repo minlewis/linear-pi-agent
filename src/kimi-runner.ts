@@ -25,6 +25,7 @@ export type KimiRunnerDeps = {
   spawnProcess?: typeof spawn;
   sessionStore?: KimiSessionStore;
   nowMs?: () => number;
+  classify?: (payload: AgentSessionWebhook) => Promise<TaskDifficulty | undefined>;
 };
 
 type ManagedRun = {
@@ -95,6 +96,87 @@ export function buildKimiFollowUpPrompt(payload: AgentSessionWebhook): string {
   return "Linear sent a follow-up event without message text. Continue from the existing session context and summarize any useful status.";
 }
 
+const CLASSIFY_TIMEOUT_MS = 45_000;
+
+export type TaskDifficulty = "easy" | "hard";
+
+type ClassifyDeps = {
+  spawnProcess?: typeof spawn;
+  timeoutMs?: number;
+};
+
+function buildClassificationPrompt(payload: AgentSessionWebhook): string {
+  const issue = payload.agentSession?.issue;
+  const promptContext = promptContextOf(payload);
+
+  return [
+    "You are classifying the difficulty of a coding task that a coding agent will receive from Linear.",
+    "Classify it as exactly one word: easy or hard.",
+    "",
+    "easy: reading code to answer a question, tiny or single-file changes, docs or config tweaks, trivial fixes.",
+    "hard: multi-file refactors, new features, non-trivial debugging, architecture decisions, large analysis tasks.",
+    "",
+    "When unsure, answer easy.",
+    "",
+    issue ? `Issue: ${issue.identifier ?? ""} ${issue.title ?? ""}`.trim() : "Issue: (none)",
+    issue?.description ? `Description:\n${issue.description}` : undefined,
+    promptContext ? `Additional context:\n${promptContext}` : undefined,
+    "",
+    "Reply with exactly one word: easy or hard.",
+  ].filter(Boolean).join("\n");
+}
+
+export function parseDifficulty(text: string): TaskDifficulty | undefined {
+  const normalized = text.trim().toLowerCase();
+  if (/\bhard\b/.test(normalized)) return "hard";
+  if (/\beasy\b/.test(normalized)) return "easy";
+  return undefined;
+}
+
+export async function classifyTaskDifficulty(
+  payload: AgentSessionWebhook,
+  deps: ClassifyDeps = {},
+): Promise<TaskDifficulty | undefined> {
+  if (!config.KIMI_MODEL_EASY && !config.KIMI_MODEL_HARD) return undefined;
+
+  const spawnProcess = deps.spawnProcess ?? spawn;
+  const routerModel = config.KIMI_MODEL_ROUTER ?? config.KIMI_MODEL_EASY ?? config.KIMI_MODEL;
+  const args = [
+    "-p", buildClassificationPrompt(payload),
+    ...(routerModel ? ["-m", routerModel] : []),
+  ];
+
+  let child: ChildProcess;
+  try {
+    child = spawnProcess(config.KIMI_COMMAND, args, { cwd: config.KIMI_WORKDIR, env: process.env });
+  } catch {
+    return undefined;
+  }
+
+  return new Promise<TaskDifficulty | undefined>((resolve) => {
+    let stdout = "";
+    let settled = false;
+    const finish = (difficulty: TaskDifficulty | undefined) => {
+      if (settled) return;
+      settled = true;
+      resolve(difficulty);
+    };
+    const timeout = setTimeout(() => {
+      killChild(child);
+      finish(undefined);
+    }, deps.timeoutMs ?? CLASSIFY_TIMEOUT_MS);
+    timeout.unref();
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      stdout += chunk.toString();
+    });
+    child.on("error", () => finish(undefined));
+    child.on("exit", () => {
+      clearTimeout(timeout);
+      finish(parseDifficulty(stdout));
+    });
+  });
+}
+
 export function summarizeKimiResult(result: KimiRunResult): string {
   const combined = [result.outputText.trim(), result.stderr.trim() ? `stderr:\n${result.stderr.trim()}` : ""]
     .filter(Boolean)
@@ -138,11 +220,24 @@ export async function runKimi(payload: AgentSessionWebhook, deps: KimiRunnerDeps
   const resumeId = isFollowUp ? await sessionStore.get(agentSessionId) : undefined;
   const prompt = isFollowUp && resumeId ? buildKimiFollowUpPrompt(payload) : buildKimiPrompt(payload);
 
+  let chosenModel = resumeId ? await sessionStore.getModel(agentSessionId) : undefined;
+  if (!chosenModel && !resumeId && (config.KIMI_MODEL_EASY || config.KIMI_MODEL_HARD)) {
+    const classify = deps.classify ?? ((p: AgentSessionWebhook) => classifyTaskDifficulty(p, { spawnProcess }));
+    const difficulty = await classify(payload);
+    chosenModel =
+      difficulty === "hard" ? (config.KIMI_MODEL_HARD ?? config.KIMI_MODEL) :
+      difficulty === "easy" ? (config.KIMI_MODEL_EASY ?? config.KIMI_MODEL) :
+      config.KIMI_MODEL;
+    console.log("task difficulty classified", { agentSessionId, difficulty, model: chosenModel });
+  } else if (chosenModel) {
+    console.log("reusing stored session model", { agentSessionId, model: chosenModel });
+  }
+
   const args = [
     ...(resumeId ? ["-S", resumeId] : []),
     "-p", prompt,
     "--output-format", "stream-json",
-    ...(config.KIMI_MODEL ? ["-m", config.KIMI_MODEL] : []),
+    ...(chosenModel ? ["-m", chosenModel] : []),
   ];
 
   const startedAt = nowMs();
@@ -179,7 +274,7 @@ export async function runKimi(payload: AgentSessionWebhook, deps: KimiRunnerDeps
     const event = handleKimiLine(line, reporter);
     if (event.sessionId) {
       capturedSessionId = event.sessionId;
-      persistPromise = sessionStore.set(agentSessionId, event.sessionId).catch((error: Error) => {
+      persistPromise = sessionStore.set(agentSessionId, event.sessionId, chosenModel).catch((error: Error) => {
         console.error("failed to persist kimi session mapping", { agentSessionId, message: error.message });
       });
     }
