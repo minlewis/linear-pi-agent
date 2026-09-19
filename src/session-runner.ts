@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { createAgentActivity } from "./linear.js";
+import { createAgentActivity, type AgentActivityContent } from "./linear.js";
 import {
   abortKimiSession,
   MAX_LINEAR_BODY_CHARS,
@@ -7,6 +7,26 @@ import {
   type KimiRunResult,
 } from "./kimi-runner.js";
 import { formatElapsed } from "./progress.js";
+
+export type SessionRunnerDeps = {
+  run?: (payload: AgentSessionWebhook) => Promise<KimiRunResult>;
+  abort?: (agentSessionId: string) => Promise<boolean>;
+  postActivity?: (agentSessionId: string, content: AgentActivityContent) => Promise<unknown>;
+};
+
+type ResolvedSessionDeps = {
+  run: (payload: AgentSessionWebhook) => Promise<KimiRunResult>;
+  abort: (agentSessionId: string) => Promise<boolean>;
+  postActivity: (agentSessionId: string, content: AgentActivityContent) => Promise<unknown>;
+};
+
+function resolveDeps(deps: SessionRunnerDeps): ResolvedSessionDeps {
+  return {
+    run: deps.run ?? runKimi,
+    abort: deps.abort ?? abortKimiSession,
+    postActivity: deps.postActivity ?? createAgentActivity,
+  };
+}
 
 type SessionState = {
   running: boolean;
@@ -88,13 +108,14 @@ export function crashActivityBody(error: Error, elapsedMs?: number): string {
   return `${prefix}: ${error.message}`;
 }
 
-export async function handleAgentSessionWebhook(payload: AgentSessionWebhook): Promise<void> {
+export async function handleAgentSessionWebhook(payload: AgentSessionWebhook, deps: SessionRunnerDeps = {}): Promise<void> {
   const agentSessionId = payload.agentSession?.id;
   if (!agentSessionId) {
     console.warn("agent session webhook missing agentSession.id");
     return;
   }
 
+  const resolved = resolveDeps(deps);
   const state = sessions.get(agentSessionId) ?? { running: false };
   sessions.set(agentSessionId, state);
 
@@ -104,8 +125,8 @@ export async function handleAgentSessionWebhook(payload: AgentSessionWebhook): P
     state.pendingPayload = undefined;
     state.running = false;
     state.lastStartedAtMs = undefined;
-    const aborted = await abortKimiSession(agentSessionId);
-    await createAgentActivity(agentSessionId, {
+    const aborted = await resolved.abort(agentSessionId);
+    await resolved.postActivity(agentSessionId, {
       type: "error",
       body: stopActivityBody(aborted, elapsedMs),
     });
@@ -113,28 +134,28 @@ export async function handleAgentSessionWebhook(payload: AgentSessionWebhook): P
   }
 
   if (payload.action === "created") {
-    startRun(agentSessionId, payload, state);
+    startRun(agentSessionId, payload, state, resolved);
     return;
   }
 
   if (payload.action === "prompted") {
     if (state.running) {
       state.pendingPayload = payload;
-      await createAgentActivity(agentSessionId, {
+      await resolved.postActivity(agentSessionId, {
         type: "thought",
         body: "Kimi received your follow-up. It will run after the current kimi task finishes.",
       });
       return;
     }
 
-    startRun(agentSessionId, payload, state);
+    startRun(agentSessionId, payload, state, resolved);
   }
 }
 
-function startRun(agentSessionId: string, payload: AgentSessionWebhook, state: SessionState): void {
+function startRun(agentSessionId: string, payload: AgentSessionWebhook, state: SessionState, deps: ResolvedSessionDeps): void {
   if (state.running) {
     state.pendingPayload = payload;
-    void createAgentActivity(agentSessionId, {
+    void deps.postActivity(agentSessionId, {
       type: "thought",
       body: "A Kimi run is already active for this session; this request is queued.",
     }).catch((error: Error) => console.error("failed to create queued activity", { message: error.message }));
@@ -144,12 +165,12 @@ function startRun(agentSessionId: string, payload: AgentSessionWebhook, state: S
   state.running = true;
   state.lastStartedAtMs = performance.now();
 
-  void runSession(agentSessionId, payload, state).catch(async (error: Error) => {
+  void runSession(agentSessionId, payload, state, deps).catch(async (error: Error) => {
     const elapsedMs = elapsedSince(state.lastStartedAtMs);
     state.running = false;
     state.lastStartedAtMs = undefined;
     console.error("kimi run crashed", { agentSessionId, message: error.message });
-    await createAgentActivity(agentSessionId, {
+    await deps.postActivity(agentSessionId, {
       type: "error",
       body: crashActivityBody(error, elapsedMs),
     }).catch((activityError: Error) => {
@@ -158,16 +179,16 @@ function startRun(agentSessionId: string, payload: AgentSessionWebhook, state: S
   });
 }
 
-async function runSession(agentSessionId: string, payload: AgentSessionWebhook, state: SessionState): Promise<void> {
+async function runSession(agentSessionId: string, payload: AgentSessionWebhook, state: SessionState, deps: ResolvedSessionDeps): Promise<void> {
   console.log("kimi run started", { agentSessionId });
-  await createAgentActivity(agentSessionId, {
+  await deps.postActivity(agentSessionId, {
     type: "thought",
     body: `Kimi received ${issueLabel(payload)} and started working.`,
   }).catch((error: Error) => {
     console.error("failed to create start activity", { agentSessionId, message: error.message });
   });
 
-  const result = await runKimi(payload);
+  const result = await deps.run(payload);
   console.log("kimi run finished", {
     agentSessionId,
     exitCode: result.exitCode,
@@ -176,7 +197,7 @@ async function runSession(agentSessionId: string, payload: AgentSessionWebhook, 
   });
 
   if (result.exitCode === 0 && !result.timedOut) {
-    await createAgentActivity(agentSessionId, {
+    await deps.postActivity(agentSessionId, {
       type: "response",
       body: finalResponseBody(result.summary, result.elapsedMs),
     });
@@ -184,7 +205,7 @@ async function runSession(agentSessionId: string, payload: AgentSessionWebhook, 
 
   } else {
     const reason = finalErrorReason(result);
-    await createAgentActivity(agentSessionId, {
+    await deps.postActivity(agentSessionId, {
       type: "error",
       body: finalErrorBody(result),
     });
@@ -198,6 +219,6 @@ async function runSession(agentSessionId: string, payload: AgentSessionWebhook, 
   const pendingPayload = state.pendingPayload;
   if (pendingPayload) {
     state.pendingPayload = undefined;
-    startRun(agentSessionId, pendingPayload, state);
+    startRun(agentSessionId, pendingPayload, state, deps);
   }
 }
