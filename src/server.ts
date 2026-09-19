@@ -68,7 +68,7 @@ export function createApp() {
   app.disable("x-powered-by");
 
   app.get("/healthz", (_req: Request, res: Response) => {
-    res.json({ ok: true, service: "linear-pi-agent" });
+    res.json({ ok: true, service: "linear-kimi-agent" });
   });
 
   app.get("/linear/install", async (req: Request, res: Response, next: express.NextFunction) => {
@@ -109,7 +109,7 @@ export function createApp() {
 
       return res.type("text/plain").send(
         [
-          "Pi is installed in Linear.",
+          "Kimi is installed in Linear.",
           `App user ID: ${install.viewerAppUserId}`,
           "You can close this tab.",
           "",
@@ -165,6 +165,6 @@ export function createApp() {
 if (process.env.NODE_ENV !== "test") {
   const app = createApp();
   app.listen(config.PORT, config.HOST, () => {
-    console.log("linear pi agent listening", publicConfig());
+    console.log("linear kimi agent listening", publicConfig());
   });
 }

@@ -1,8 +1,8 @@
-# Linear Pi Agent
+# Linear Kimi Agent
 
-Connect your own [`pi`](https://github.com/earendil-works/pi) coding agent to Linear. This service is one way to do that: Linear sends Agent Session events to this app, this app runs `pi` against your chosen repository, and progress/results are sent back to Linear.
+Connect [Kimi Code](https://moonshotai.github.io/kimi-code/) to Linear. This service receives Linear Agent Session events, runs the `kimi` CLI against your chosen repository, and posts progress and results back to Linear.
 
-The agent service is intended to live in its own repository, separate from the application repository it operates on. Configure the target application repository with `PI_WORKDIR`.
+The agent service is intended to live in its own repository, separate from the application repository it operates on. Configure the target application repository with `KIMI_WORKDIR`.
 
 ## Easy install with a coding agent
 
@@ -13,8 +13,8 @@ If you want the easiest setup path, copy the contents of [`INSTALL.md`](./INSTAL
 ```text
 Linear Agent Session
   -> webhook to this service
-  -> pi SDK session
-  -> target repository at PI_WORKDIR
+  -> kimi CLI subprocess (kimi -p ... --output-format stream-json)
+  -> target repository at KIMI_WORKDIR
   -> progress/results back to Linear
 ```
 
@@ -22,9 +22,10 @@ The service:
 
 - exposes OAuth install and webhook endpoints for Linear
 - stores Linear OAuth tokens locally
-- keeps a persistent pi SDK session per Linear `agentSession.id`
-- supports follow-up prompts on active sessions
-- handles stop/cancel requests by aborting the pi session
+- spawns a `kimi` process per run and streams its `stream-json` (NDJSON) output into Linear progress activities
+- persists a Linear `agentSession.id` → Kimi `session_id` mapping, so follow-up prompts resume the same Kimi session (even across service restarts)
+- queues follow-ups that arrive while a run is active
+- handles stop/cancel requests by killing the `kimi` process
 - redacts obvious secret-looking values from progress updates
 - deduplicates repeated progress updates and sends a configurable heartbeat during quiet long-running sessions
 
@@ -68,10 +69,10 @@ This redirects through Linear OAuth and stores the app token locally. `INSTALL_S
 ## Requirements
 
 - Node.js and npm
-- `pi` available to the service, or the pi SDK configured through dependencies
+- the `kimi` CLI installed for the service user and authenticated (`kimi login`)
 - a public HTTPS URL that Linear can reach
 - a reverse proxy or tunnel forwarding public traffic to this service
-- a target repository for pi to operate on
+- a target repository for Kimi Code to operate on
 
 By default the service listens on `127.0.0.1:8787`. Expose these routes publicly:
 
@@ -82,7 +83,7 @@ By default the service listens on `127.0.0.1:8787`. Expose these routes publicly
 
 ## Recommended hosting
 
-I recommend running this on [exe.dev](https://exe.dev) or a small [Hetzner](https://www.hetzner.com/cloud/) VPS: something that can stay online, receive HTTPS webhooks from Linear, and access the repository you want `pi` to work on.
+Run this somewhere that can stay online, receive HTTPS webhooks from Linear, and access the repository you want Kimi Code to work on: a small VPS or any host with a public HTTPS endpoint.
 
 ## Configuration
 
@@ -96,16 +97,14 @@ INSTALL_SECRET=
 LINEAR_REDIRECT_URI=https://your-domain.example/linear/oauth/callback
 BASE_URL=https://your-domain.example
 
-PI_WORKDIR=/path/to/your/app
-PI_COMMAND=pi
-PI_MODE=json
-PI_RUNNER=sdk
-PI_THEME=light
-PI_SESSION_DIR=./data/pi-sessions
-PI_PROGRESS_DEBOUNCE_MS=3000
-PI_PROGRESS_HEARTBEAT_MS=300000
-PI_PROGRESS_LONG_TOOL_MS=30000
-PI_TIMEOUT_MS=1800000
+KIMI_WORKDIR=/path/to/your/app
+KIMI_COMMAND=kimi
+# KIMI_MODEL=
+KIMI_SESSION_STORE_PATH=./data/kimi-sessions.json
+KIMI_PROGRESS_DEBOUNCE_MS=3000
+KIMI_PROGRESS_HEARTBEAT_MS=300000
+KIMI_PROGRESS_LONG_TOOL_MS=30000
+KIMI_TIMEOUT_MS=1800000
 
 HOST=127.0.0.1
 PORT=8787
@@ -119,12 +118,14 @@ Important values:
 - `LINEAR_REDIRECT_URI` — must exactly match the OAuth callback URL configured in Linear
 - `LINEAR_WEBHOOK_SECRET` — Linear webhook signing secret
 - `INSTALL_SECRET` — random secret for `/linear/install`; use at least 16 characters
-- `PI_WORKDIR` — the repository pi should work in
-- `PI_THEME` — Pi theme name for SDK runs; defaults to `light`, and custom theme names are allowed
-- `PI_SESSION_DIR` — persisted pi SDK session state
-- `PI_PROGRESS_DEBOUNCE_MS` — minimum delay between Linear progress activities
-- `PI_PROGRESS_HEARTBEAT_MS` — quiet interval before posting a "still working" progress heartbeat
-- `PI_PROGRESS_LONG_TOOL_MS` — minimum successful tool duration before posting completion progress; `0` disables completion updates
+- `KIMI_WORKDIR` — the repository Kimi Code should work in
+- `KIMI_COMMAND` — Kimi CLI executable; defaults to `kimi`
+- `KIMI_MODEL` — optional model alias passed as `kimi -m`
+- `KIMI_SESSION_STORE_PATH` — persisted Linear → Kimi session mapping
+- `KIMI_PROGRESS_DEBOUNCE_MS` — minimum delay between Linear progress activities
+- `KIMI_PROGRESS_HEARTBEAT_MS` — quiet interval before posting a "still working" progress heartbeat
+- `KIMI_PROGRESS_LONG_TOOL_MS` — minimum successful tool duration before posting completion progress; `0` disables completion updates
+- `KIMI_TIMEOUT_MS` — maximum run duration before the `kimi` process is killed
 - `TOKEN_STORE_PATH` / `STATE_STORE_PATH` — persisted Linear OAuth state
 
 Use absolute paths for token, state, and session storage in production.
@@ -164,45 +165,47 @@ Install/reload the user service:
 npm install
 npm run typecheck
 npm run build
-install -Dm644 systemd/linear-pi-agent.service.template \
-  ~/.config/systemd/user/linear-pi-agent.service
+install -Dm644 systemd/linear-kimi-agent.service.template \
+  ~/.config/systemd/user/linear-kimi-agent.service
 systemctl --user daemon-reload
-systemctl --user restart linear-pi-agent
-systemctl --user status linear-pi-agent
+systemctl --user restart linear-kimi-agent
+systemctl --user status linear-kimi-agent
 ```
 
 Watch logs:
 
 ```bash
-journalctl --user -u linear-pi-agent -f
+journalctl --user -u linear-kimi-agent -f
 ```
 
 Enable startup after host reboot:
 
 ```bash
-systemctl --user enable linear-pi-agent
+systemctl --user enable linear-kimi-agent
 loginctl enable-linger "$USER"
 ```
+
+The systemd unit assumes the `kimi` CLI is on `PATH` for the service user and authenticated via `kimi login`. Kimi sessions are stored in the service user's home directory.
 
 ## Repository layout
 
 - `src/` — TypeScript service source
-- `systemd/linear-pi-agent.service.template` — user systemd unit template
+- `systemd/linear-kimi-agent.service.template` — user systemd unit template
 - `.env.example` — configuration template
-- `data/` — local OAuth and pi session state, ignored by git
+- `data/` — local OAuth and kimi session state, ignored by git
 - `dist/` — compiled output, ignored by git
 
-Ignored locally: `.env`, `data/*.json`, `data/pi-sessions/`, `dist/`, `node_modules/`, and logs.
+Ignored locally: `.env`, `data/*.json`, `dist/`, `node_modules/`, and logs.
 
 ## Security notes
 
-This service gives Linear a path to run `pi` in `PI_WORKDIR`. Judge for yourself whether that is appropriate for your repository, workspace, users, and hosting environment.
+This service gives Linear a path to run Kimi Code in `KIMI_WORKDIR`. Judge for yourself whether that is appropriate for your repository, workspace, users, and hosting environment.
 
 Important considerations:
 
 - Keep `INSTALL_SECRET` set. Without it, anyone who knows your service URL can visit `/linear/install` and start an OAuth install flow.
 - The webhook endpoint verifies Linear's signature with `LINEAR_WEBHOOK_SECRET`; knowing the public URL alone should not be enough to fake Linear webhooks.
-- Anyone who can use this Linear agent can ask `pi` to act in `PI_WORKDIR`. Treat Linear agent access like write access to that repository.
+- Anyone who can use this Linear agent can ask Kimi Code to act in `KIMI_WORKDIR`. Treat Linear agent access like write access to that repository.
 - Run the service as a low-privilege user and avoid keeping unrelated secrets in the target repository.
 - Output redaction is best-effort. The service redacts obvious token-looking strings, but you should still avoid exposing secrets to the agent workspace.
 - Add rate limiting at your reverse proxy or hosting layer if the service is public, especially for `/linear/install` and `/linear/webhook`.
@@ -218,11 +221,12 @@ Public endpoint expectations:
 
 ## Operational notes
 
-Active run and queue state is currently in memory. A Node/systemd restart can lose an active run or queued follow-up prompt, although OAuth tokens and pi session history are persisted on disk.
+Active run and queue state is currently in memory. A Node/systemd restart can lose an active run or queued follow-up prompt, although OAuth tokens and the Linear → Kimi session mapping are persisted on disk.
 
 ## Roadmap
 
 - Multi-workspace support. The current implementation targets one Linear workspace/install.
 - Better Linear app/install management for multiple installations.
-- Commands for model switching, thinking-level switching, session restart, and related runtime controls.
+- Mid-run follow-up injection once the kimi CLI supports it (today follow-ups queue until the active run finishes).
 - Investigate support for installed slash commands or command-like actions that can be executed from Linear.
+- Optional ACP (`kimi acp`) transport instead of subprocess-per-run.

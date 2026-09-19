@@ -1,15 +1,15 @@
 [Unit]
-Description=Linear Pi Agent
-Documentation=file:%h/linear-pi-agent/README.md
+Description=Linear Kimi Agent
+Documentation=file:%h/linear-kimi-agent/README.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/linear-pi-agent
-EnvironmentFile=%h/linear-pi-agent/.env
-Environment=TOKEN_STORE_PATH=%h/linear-pi-agent/data/linear-tokens.json
-Environment=STATE_STORE_PATH=%h/linear-pi-agent/data/oauth-states.json
+WorkingDirectory=%h/linear-kimi-agent
+EnvironmentFile=%h/linear-kimi-agent/.env
+Environment=TOKEN_STORE_PATH=%h/linear-kimi-agent/data/linear-tokens.json
+Environment=STATE_STORE_PATH=%h/linear-kimi-agent/data/oauth-states.json
 Environment=PATH=%h/.local/share/mise/installs/node/latest/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=%h/.local/share/mise/installs/node/latest/bin/node dist/server.js
 Restart=on-failure
