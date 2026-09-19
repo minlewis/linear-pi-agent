@@ -1,0 +1,21 @@
+[Unit]
+Description=Linear Kimi Agent
+Documentation=file:/home/ubuntu/linear-pi-agent/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/linear-pi-agent
+EnvironmentFile=-/home/ubuntu/linear-pi-agent/.env
+Environment=PATH=/home/ubuntu/.kimi-code/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/node dist/server.js
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

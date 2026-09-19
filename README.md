@@ -189,6 +189,17 @@ loginctl enable-linger "$USER"
 
 The systemd unit assumes the `kimi` CLI is on `PATH` for the service user and authenticated via `kimi login`. Kimi sessions are stored in the service user's home directory.
 
+If the host has no working user systemd (`systemctl --user` fails with `Failed to connect to bus: No medium found`), install the unit system-wide instead:
+
+```bash
+install -Dm644 systemd/linear-kimi-agent.system.service.template \
+  /etc/systemd/system/linear-kimi-agent.service
+# adjust User/Group/WorkingDirectory/paths in the unit for your host
+sudo systemctl daemon-reload
+sudo systemctl enable --now linear-kimi-agent
+journalctl -u linear-kimi-agent -f
+```
+
 ## Repository layout
 
 - `src/` — TypeScript service source
