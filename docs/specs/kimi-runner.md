@@ -116,6 +116,7 @@ export type KimiRunResult = {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
+  stderr: string;           // captured for failure summaries
   outputText: string;       // final assistant text
   summary: string;          // redacted, truncated, Linear-ready
   elapsedMs: number;

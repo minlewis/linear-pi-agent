@@ -18,14 +18,14 @@ test("final response body includes elapsed footer", async () => {
   const { finalResponseBody } = await sessionRunnerModule();
 
   assert.equal(
-    finalResponseBody("pi changed files.", 252_000),
-    "pi changed files.\n\n_Run completed in 4m 12s._",
+    finalResponseBody("kimi changed files.", 252_000),
+    "kimi changed files.\n\n_Run completed in 4m 12s._",
   );
 });
 
 test("final response body preserves elapsed footer when summary is truncated", async () => {
   const { finalResponseBody } = await sessionRunnerModule();
-  const { MAX_LINEAR_BODY_CHARS } = await import("../src/pi-runner.js");
+  const { MAX_LINEAR_BODY_CHARS } = await import("../src/kimi-runner.js");
 
   const body = finalResponseBody("x".repeat(MAX_LINEAR_BODY_CHARS), 1_800_000);
 
@@ -41,13 +41,12 @@ test("final error body reports timeout elapsed runtime", async () => {
       exitCode: null,
       signal: null,
       timedOut: true,
-      stdout: "",
       stderr: "",
       outputText: "partial",
-      summary: "pi failed without output.",
+      summary: "kimi failed without output.",
       elapsedMs: 1_800_000,
     }),
-    "pi timed out after 30m\n\npi failed without output.",
+    "kimi timed out after 30m\n\nkimi failed without output.",
   );
 });
 
@@ -59,13 +58,12 @@ test("final error body reports non-timeout SDK failure elapsed runtime", async (
       exitCode: 1,
       signal: null,
       timedOut: false,
-      stdout: "",
       stderr: "boom",
       outputText: "",
       summary: "stderr:\nboom",
       elapsedMs: 12_000,
     }),
-    "pi failed after 12s\n\nstderr:\nboom",
+    "kimi failed after 12s\n\nstderr:\nboom",
   );
 });
 
@@ -73,9 +71,9 @@ test("stop and crash activity copy includes elapsed runtime when available", asy
   const { crashActivityBody, stopActivityBody } = await sessionRunnerModule();
 
   assert.equal(stopActivityBody(true, 128_000), "Stopped by user after 2m 8s.");
-  assert.equal(stopActivityBody(false, 128_000), "Stop requested; no active pi run was in progress.");
+  assert.equal(stopActivityBody(false, 128_000), "Stop requested; no active kimi run was in progress.");
   assert.equal(
     crashActivityBody(new Error("SDK unavailable"), 3_000),
-    "Pi failed to start or run pi after 3s: SDK unavailable",
+    "Kimi failed to start or run kimi after 3s: SDK unavailable",
   );
 });

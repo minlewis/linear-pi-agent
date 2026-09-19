@@ -1,5 +1,4 @@
 import { performance } from "node:perf_hooks";
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { config } from "./config.js";
 import { createAgentActivity, type AgentActivityContent } from "./linear.js";
 
@@ -311,34 +310,6 @@ export class ProgressReporter {
         message: error instanceof Error ? error.message : String(error),
       });
     }
-  }
-}
-
-export function handleSdkEvent(event: AgentSessionEvent, reporter: ProgressReporter): void {
-  switch (event.type) {
-    case "agent_start":
-      reporter.thought("Pi is starting the coding session.");
-      break;
-    case "turn_start":
-      break;
-    case "tool_execution_start":
-      reporter.toolStarted(event.toolCallId, event.toolName, event.args);
-      break;
-    case "tool_execution_update":
-      break;
-    case "tool_execution_end":
-      reporter.toolEnded(event.toolCallId, event.toolName, event.isError);
-      break;
-    case "message_end":
-      break;
-    case "compaction_start":
-      reporter.thought("Pi is compacting context before continuing.");
-      break;
-    case "auto_retry_start":
-      reporter.thought(`Pi is retrying after an error (${event.attempt}/${event.maxAttempts}).`);
-      break;
-    case "queue_update":
-      break;
   }
 }
 

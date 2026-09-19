@@ -86,23 +86,11 @@ test("failed sends do not update dedupe state", async () => {
   assert.deepEqual(sent, [{ type: "thought", body: "retry me" }]);
 });
 
-test("turn_start and message_end create no progress", async () => {
-  const { ProgressReporter, handleSdkEvent } = await progressModule();
-  const { sent, send } = sentCollector();
-  const reporter = new ProgressReporter({ agentSessionId: "session", debounceMs: 1, send });
-
-  handleSdkEvent({ type: "turn_start" } as never, reporter);
-  handleSdkEvent({ type: "message_end" } as never, reporter);
-  await reporter.flush();
-
-  assert.equal(sent.length, 0);
-});
-
 test("toolProgressText formats known tools safely", async () => {
   const { toolProgressText } = await progressModule();
 
   assert.equal(toolProgressText("bash", { command: "npm run typecheck" }), "Running bash: npm run typecheck");
-  assert.equal(toolProgressText("read", { path: "src/pi-runner.ts" }), "Running read: src/pi-runner.ts");
+  assert.equal(toolProgressText("read", { path: "src/kimi-runner.ts" }), "Running read: src/kimi-runner.ts");
   assert.equal(toolProgressText("write", { path: "README.md", content: "SECRET=abc" }), "Running write: README.md");
   assert.equal(toolProgressText("edit", { path: "src/config.ts", oldText: "TOKEN=abc", newText: "TOKEN=def" }), "Running edit: src/config.ts");
   assert.equal(toolProgressText("ls", {}), "Running ls: .");
@@ -310,30 +298,44 @@ test("completion uses redacted truncated start display and ignores result", asyn
   assert.equal(completion.length <= 220, true);
 });
 
-test("tool_execution_start reports sanitized useful progress", async () => {
-  const { ProgressReporter, handleSdkEvent } = await progressModule();
+test("kimi tool_calls report sanitized useful progress", async () => {
+  const { handleKimiLine, ProgressReporter } = await progressModule();
   const { sent, send } = sentCollector();
   const reporter = new ProgressReporter({ agentSessionId: "session", debounceMs: 1, send });
 
-  handleSdkEvent({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: { command: "echo TOKEN=abc123" } } as never, reporter);
+  handleKimiLine(JSON.stringify({
+    role: "assistant",
+    tool_calls: [{
+      type: "function",
+      id: "call-1",
+      function: { name: "bash", arguments: JSON.stringify({ command: "echo TOKEN=abc123" }) },
+    }],
+  }), reporter);
   await reporter.flush();
 
   assert.deepEqual(sent, [{ type: "thought", body: "Running bash: echo TOKEN=[redacted]" }]);
 });
 
-test("tool_execution_end reports slow completion and tool_execution_update is a no-op", async () => {
-  const { ProgressReporter, handleSdkEvent } = await progressModule();
+test("kimi tool results report slow completion and unknown lines are no-ops", async () => {
+  const { handleKimiLine, ProgressReporter } = await progressModule();
   const { sent, send } = sentCollector();
   let now = 0;
   const reporter = new ProgressReporter({ agentSessionId: "session", debounceMs: 1, longToolMs: 30_000, nowMs: () => now, send });
 
-  handleSdkEvent({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: { command: "npm test" } } as never, reporter);
+  handleKimiLine(JSON.stringify({
+    role: "assistant",
+    tool_calls: [{
+      type: "function",
+      id: "call-1",
+      function: { name: "bash", arguments: JSON.stringify({ command: "npm test" }) },
+    }],
+  }), reporter);
   await reporter.flush();
-  handleSdkEvent({ type: "tool_execution_update", toolCallId: "call-1", toolName: "bash", args: {}, partialResult: "secret result" } as never, reporter);
+  handleKimiLine(JSON.stringify({ role: "future_role", content: "secret result" }), reporter);
   await reporter.flush();
   now = 31_000;
-  handleSdkEvent({ type: "tool_execution_end", toolCallId: "call-1", toolName: "bash", result: "secret result", isError: false } as never, reporter);
-  handleSdkEvent({ type: "message_end" } as never, reporter);
+  handleKimiLine(JSON.stringify({ role: "tool", tool_call_id: "call-1", content: "secret result" }), reporter);
+  handleKimiLine("", reporter);
   await reporter.flush();
 
   assert.deepEqual(sent, [

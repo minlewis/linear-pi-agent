@@ -1,13 +1,11 @@
 import { performance } from "node:perf_hooks";
 import { createAgentActivity } from "./linear.js";
 import {
-  abortPiSession,
-  buildPiFollowUpPrompt,
+  abortKimiSession,
   MAX_LINEAR_BODY_CHARS,
-  queuePiFollowUp,
-  runPi,
-  type PiRunResult,
-} from "./pi-runner.js";
+  runKimi,
+  type KimiRunResult,
+} from "./kimi-runner.js";
 import { formatElapsed } from "./progress.js";
 
 type SessionState = {
@@ -68,25 +66,25 @@ export function finalResponseBody(summary: string, elapsedMs: number): string {
   return `${summary.slice(0, summaryLength)}${footer}`;
 }
 
-function finalErrorReason(result: PiRunResult): string {
+function finalErrorReason(result: KimiRunResult): string {
   return result.timedOut
-    ? `pi timed out after ${formatElapsed(result.elapsedMs)}`
-    : `pi failed after ${formatElapsed(result.elapsedMs)}`;
+    ? `kimi timed out after ${formatElapsed(result.elapsedMs)}`
+    : `kimi failed after ${formatElapsed(result.elapsedMs)}`;
 }
 
-export function finalErrorBody(result: PiRunResult): string {
+export function finalErrorBody(result: KimiRunResult): string {
   return `${finalErrorReason(result)}\n\n${result.summary}`;
 }
 
 export function stopActivityBody(aborted: boolean, elapsedMs?: number): string {
-  if (!aborted) return "Stop requested; no active pi run was in progress.";
+  if (!aborted) return "Stop requested; no active kimi run was in progress.";
   return elapsedMs === undefined ? "Stopped by user." : `Stopped by user after ${formatElapsed(elapsedMs)}.`;
 }
 
 export function crashActivityBody(error: Error, elapsedMs?: number): string {
   const prefix = elapsedMs === undefined
-    ? "Pi failed to start or run pi"
-    : `Pi failed to start or run pi after ${formatElapsed(elapsedMs)}`;
+    ? "Kimi failed to start or run kimi"
+    : `Kimi failed to start or run kimi after ${formatElapsed(elapsedMs)}`;
   return `${prefix}: ${error.message}`;
 }
 
@@ -106,7 +104,7 @@ export async function handleAgentSessionWebhook(payload: AgentSessionWebhook): P
     state.pendingPayload = undefined;
     state.running = false;
     state.lastStartedAtMs = undefined;
-    const aborted = await abortPiSession(agentSessionId);
+    const aborted = await abortKimiSession(agentSessionId);
     await createAgentActivity(agentSessionId, {
       type: "error",
       body: stopActivityBody(aborted, elapsedMs),
@@ -121,18 +119,11 @@ export async function handleAgentSessionWebhook(payload: AgentSessionWebhook): P
 
   if (payload.action === "prompted") {
     if (state.running) {
-      if (await queuePiFollowUp(agentSessionId, buildPiFollowUpPrompt(payload))) {
-        await createAgentActivity(agentSessionId, {
-          type: "thought",
-          body: "Pi received your follow-up. It is queued in the active pi session.",
-        });
-      } else {
-        state.pendingPayload = payload;
-        await createAgentActivity(agentSessionId, {
-          type: "thought",
-          body: "Pi received your follow-up. It will run after the current pi task finishes.",
-        });
-      }
+      state.pendingPayload = payload;
+      await createAgentActivity(agentSessionId, {
+        type: "thought",
+        body: "Kimi received your follow-up. It will run after the current kimi task finishes.",
+      });
       return;
     }
 
@@ -145,7 +136,7 @@ function startRun(agentSessionId: string, payload: AgentSessionWebhook, state: S
     state.pendingPayload = payload;
     void createAgentActivity(agentSessionId, {
       type: "thought",
-      body: "A Pi run is already active for this session; this request is queued.",
+      body: "A Kimi run is already active for this session; this request is queued.",
     }).catch((error: Error) => console.error("failed to create queued activity", { message: error.message }));
     return;
   }
@@ -157,27 +148,27 @@ function startRun(agentSessionId: string, payload: AgentSessionWebhook, state: S
     const elapsedMs = elapsedSince(state.lastStartedAtMs);
     state.running = false;
     state.lastStartedAtMs = undefined;
-    console.error("pi run crashed", { agentSessionId, message: error.message });
+    console.error("kimi run crashed", { agentSessionId, message: error.message });
     await createAgentActivity(agentSessionId, {
       type: "error",
       body: crashActivityBody(error, elapsedMs),
     }).catch((activityError: Error) => {
-      console.error("failed to create pi crash activity", { message: activityError.message });
+      console.error("failed to create kimi crash activity", { message: activityError.message });
     });
   });
 }
 
 async function runSession(agentSessionId: string, payload: AgentSessionWebhook, state: SessionState): Promise<void> {
-  console.log("pi run started", { agentSessionId });
+  console.log("kimi run started", { agentSessionId });
   await createAgentActivity(agentSessionId, {
     type: "thought",
-    body: `Pi received ${issueLabel(payload)} and started working.`,
+    body: `Kimi received ${issueLabel(payload)} and started working.`,
   }).catch((error: Error) => {
     console.error("failed to create start activity", { agentSessionId, message: error.message });
   });
 
-  const result = await runPi(payload);
-  console.log("pi run finished", {
+  const result = await runKimi(payload);
+  console.log("kimi run finished", {
     agentSessionId,
     exitCode: result.exitCode,
     timedOut: result.timedOut,
