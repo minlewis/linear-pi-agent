@@ -1,5 +1,4 @@
 import { performance } from "node:perf_hooks";
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { config } from "./config.js";
 import { createAgentActivity, type AgentActivityContent } from "./linear.js";
 
@@ -191,9 +190,9 @@ export class ProgressReporter {
   private readonly logger: Pick<typeof console, "error">;
 
   constructor(private readonly options: ProgressReporterOptions) {
-    this.debounceMs = options.debounceMs ?? config.PI_PROGRESS_DEBOUNCE_MS;
-    this.heartbeatMs = options.heartbeatMs ?? config.PI_PROGRESS_HEARTBEAT_MS;
-    this.longToolMs = options.longToolMs ?? config.PI_PROGRESS_LONG_TOOL_MS;
+    this.debounceMs = options.debounceMs ?? config.KIMI_PROGRESS_DEBOUNCE_MS;
+    this.heartbeatMs = options.heartbeatMs ?? config.KIMI_PROGRESS_HEARTBEAT_MS;
+    this.longToolMs = options.longToolMs ?? config.KIMI_PROGRESS_LONG_TOOL_MS;
     this.nowMs = options.nowMs ?? (() => performance.now());
     this.send = options.send ?? createAgentActivity;
     this.logger = options.logger ?? console;
@@ -214,14 +213,15 @@ export class ProgressReporter {
     this.queue({ type: "thought", body: `Running ${display}`, dedupeKey: `tool-start:${toolCallId}` });
   }
 
-  toolEnded(toolCallId: string, toolName: string, isError: boolean): void {
+  toolEnded(toolCallId: string, toolName: string | undefined, isError: boolean): void {
     const run = this.toolRuns.get(toolCallId);
     this.toolRuns.delete(toolCallId);
+    const name = toolName || run?.toolName || "tool";
 
     if (isError) {
       this.queue({
         type: "thought",
-        body: `${toolName} reported an error; Pi is adjusting.`,
+        body: `${name} reported an error; Kimi is adjusting.`,
         dedupeKey: `tool-error:${toolCallId}`,
       });
       return;
@@ -261,7 +261,7 @@ export class ProgressReporter {
     const elapsedMinutes = Math.max(1, Math.round((Date.now() - this.heartbeatStartedAt) / 60_000));
     this.queue({
       type: "thought",
-      body: `Pi is still working (${elapsedMinutes} min).`,
+      body: `Kimi is still working (${elapsedMinutes} min).`,
       dedupeKey: `heartbeat:${elapsedMinutes}`,
     });
   }
@@ -306,37 +306,102 @@ export class ProgressReporter {
       this.lastSentAt = Date.now();
       this.lastSentKey = update.dedupeKey;
     } catch (error) {
-      this.logger.error("failed to post pi progress", {
+      this.logger.error("failed to post kimi progress", {
         message: error instanceof Error ? error.message : String(error),
       });
     }
   }
 }
 
-export function handleSdkEvent(event: AgentSessionEvent, reporter: ProgressReporter): void {
-  switch (event.type) {
-    case "agent_start":
-      reporter.thought("Pi is starting the coding session.");
-      break;
-    case "turn_start":
-      break;
-    case "tool_execution_start":
-      reporter.toolStarted(event.toolCallId, event.toolName, event.args);
-      break;
-    case "tool_execution_update":
-      break;
-    case "tool_execution_end":
-      reporter.toolEnded(event.toolCallId, event.toolName, event.isError);
-      break;
-    case "message_end":
-      break;
-    case "compaction_start":
-      reporter.thought("Pi is compacting context before continuing.");
-      break;
-    case "auto_retry_start":
-      reporter.thought(`Pi is retrying after an error (${event.attempt}/${event.maxAttempts}).`);
-      break;
-    case "queue_update":
-      break;
+type KimiToolCall = {
+  type?: string;
+  id?: string;
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+};
+
+function kimiToolCalls(event: Record<string, unknown>): KimiToolCall[] {
+  if (!Array.isArray(event.tool_calls)) return [];
+  return event.tool_calls.filter(
+    (call): call is KimiToolCall => Boolean(call) && typeof call === "object",
+  );
+}
+
+function parseToolArguments(raw: string | undefined): unknown {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
   }
+}
+
+function kimiTextContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .flatMap((part) => {
+      if (!part || typeof part !== "object") return [];
+      const maybeText = (part as { text?: unknown }).text;
+      return typeof maybeText === "string" ? [maybeText] : [];
+    })
+    .join("\n");
+}
+
+function isErrorToolResult(content: unknown): boolean {
+  const text = kimiTextContent(content).trimStart();
+  return /^(error|exception|failed|failure)\b/i.test(text);
+}
+
+// Handles one line of Kimi Code `stream-json` (NDJSON) output. Malformed lines
+// and unknown event shapes are ignored for forward compatibility. Returns the
+// kimi session id for session.resume_hint meta events and the assistant text
+// for assistant content events; the caller decides which texts are final.
+export type KimiLineResult = {
+  sessionId?: string;
+  assistantText?: string;
+};
+
+export function handleKimiLine(line: string, reporter: ProgressReporter): KimiLineResult {
+  const trimmed = line.trim();
+  if (!trimmed) return {};
+
+  let event: unknown;
+  try {
+    event = JSON.parse(trimmed);
+  } catch {
+    return {};
+  }
+  if (!event || typeof event !== "object" || Array.isArray(event)) return {};
+
+  const record = event as Record<string, unknown>;
+  const role = typeof record.role === "string" ? record.role : undefined;
+
+  if (role === "meta") {
+    if (record.type === "session.resume_hint" && typeof record.session_id === "string") {
+      return { sessionId: record.session_id };
+    }
+    return {};
+  }
+
+  if (role === "assistant") {
+    for (const call of kimiToolCalls(record)) {
+      if (call.type !== "function" || !call.id) continue;
+      reporter.toolStarted(call.id, call.function?.name ?? "tool", parseToolArguments(call.function?.arguments));
+    }
+
+    const text = kimiTextContent(record.content).trim();
+    return text ? { assistantText: text } : {};
+  }
+
+  if (role === "tool") {
+    const toolCallId = typeof record.tool_call_id === "string" ? record.tool_call_id : undefined;
+    if (toolCallId) reporter.toolEnded(toolCallId, undefined, isErrorToolResult(record.content));
+    return {};
+  }
+
+  return {};
 }

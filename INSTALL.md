@@ -1,10 +1,10 @@
 # Agent install instructions
 
-Use this file to install `linear-pi-agent` for a user. Be proactive: do every step you can do yourself. Only stop to ask the user for information, credentials, browser actions, or infrastructure changes you cannot perform.
+Use this file to install `linear-kimi-agent` for a user. Be proactive: do every step you can do yourself. Only stop to ask the user for information, credentials, browser actions, or infrastructure changes you cannot perform.
 
 ## Goal
 
-Set up a service that connects the user's own `pi` agent to Linear Agent Sessions.
+Set up a service that connects the user's own `kimi` agent to Linear Agent Sessions.
 
 ## Install flow
 
@@ -13,8 +13,8 @@ Set up a service that connects the user's own `pi` agent to Linear Agent Session
 If the repository is not already present, clone it and enter the repo directory:
 
 ```bash
-git clone https://github.com/hiasinho/linear-pi-agent.git
-cd linear-pi-agent
+git clone https://github.com/hiasinho/linear-kimi-agent.git
+cd linear-kimi-agent
 ```
 
 If the repository is already present, enter it.
@@ -36,7 +36,7 @@ If a command fails, fix what you can. Only ask the user when the failure require
 Ask the user for only the values you cannot discover:
 
 - public HTTPS base URL for this service, for example `https://agent.example.com`
-- target repository path for `PI_WORKDIR`
+- target repository path for `KIMI_WORKDIR`
 - Linear client ID
 - Linear client secret
 - Linear webhook secret
@@ -76,15 +76,15 @@ Run these yourself:
 ```bash
 node --version
 npm --version
-which pi
+which kimi
 ```
 
-If `pi` is not installed or not authenticated for the service user, stop and ask the user to install/authenticate pi.
+If `pi` is not installed or not authenticated for the service user, stop and ask the user to install/authenticate the kimi CLI.
 
 Verify the target repo exists:
 
 ```bash
-test -d "$PI_WORKDIR"
+test -d "$KIMI_WORKDIR"
 ```
 
 ### 4. Write `.env`
@@ -98,20 +98,18 @@ LINEAR_WEBHOOK_SECRET=...
 INSTALL_SECRET=...
 LINEAR_REDIRECT_URI=https://YOUR_DOMAIN/linear/oauth/callback
 BASE_URL=https://YOUR_DOMAIN
-PI_WORKDIR=/absolute/path/to/target/repo
-PI_COMMAND=pi
-PI_MODE=json
-PI_RUNNER=sdk
-PI_THEME=light
-PI_SESSION_DIR=/absolute/path/to/linear-pi-agent/data/pi-sessions
-PI_PROGRESS_DEBOUNCE_MS=3000
-PI_PROGRESS_HEARTBEAT_MS=300000
-PI_PROGRESS_LONG_TOOL_MS=30000
-PI_TIMEOUT_MS=1800000
+KIMI_WORKDIR=/absolute/path/to/target/repo
+KIMI_COMMAND=kimi
+# KIMI_MODEL=...
+KIMI_SESSION_STORE_PATH=/absolute/path/to/linear-kimi-agent/data/kimi-sessions.json
+KIMI_PROGRESS_DEBOUNCE_MS=3000
+KIMI_PROGRESS_HEARTBEAT_MS=300000
+KIMI_PROGRESS_LONG_TOOL_MS=30000
+KIMI_TIMEOUT_MS=1800000
 HOST=127.0.0.1
 PORT=8787
-TOKEN_STORE_PATH=/absolute/path/to/linear-pi-agent/data/linear-tokens.json
-STATE_STORE_PATH=/absolute/path/to/linear-pi-agent/data/oauth-states.json
+TOKEN_STORE_PATH=/absolute/path/to/linear-kimi-agent/data/linear-tokens.json
+STATE_STORE_PATH=/absolute/path/to/linear-kimi-agent/data/oauth-states.json
 ```
 
 Never commit `.env` or print secrets back to the user.
@@ -129,11 +127,11 @@ npm run build
 Install/restart the user systemd service:
 
 ```bash
-install -Dm644 systemd/linear-pi-agent.service.template \
-  ~/.config/systemd/user/linear-pi-agent.service
+install -Dm644 systemd/linear-kimi-agent.service.template \
+  ~/.config/systemd/user/linear-kimi-agent.service
 systemctl --user daemon-reload
-systemctl --user restart linear-pi-agent
-systemctl --user status linear-pi-agent --no-pager
+systemctl --user restart linear-kimi-agent
+systemctl --user status linear-kimi-agent --no-pager
 ```
 
 If systemd is unavailable, run the service another way and keep it supervised.
@@ -149,7 +147,7 @@ curl -fsS http://127.0.0.1:8787/healthz
 If this fails, inspect logs and fix the service:
 
 ```bash
-journalctl --user -u linear-pi-agent -n 100 --no-pager
+journalctl --user -u linear-kimi-agent -n 100 --no-pager
 ```
 
 ### 7. Public HTTPS routing
@@ -194,13 +192,13 @@ If they fail, inspect logs and fix what you can.
 Ask the user to start a Linear Agent Session. Then watch logs:
 
 ```bash
-journalctl --user -u linear-pi-agent -f
+journalctl --user -u linear-kimi-agent -f
 ```
 
 Confirm:
 
 - an `AgentSessionEvent` arrives
-- pi starts in `PI_WORKDIR`
+- kimi starts in `KIMI_WORKDIR`
 - progress is posted back to Linear
 
 ## Rules
