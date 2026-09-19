@@ -191,9 +191,9 @@ export class ProgressReporter {
   private readonly logger: Pick<typeof console, "error">;
 
   constructor(private readonly options: ProgressReporterOptions) {
-    this.debounceMs = options.debounceMs ?? config.PI_PROGRESS_DEBOUNCE_MS;
-    this.heartbeatMs = options.heartbeatMs ?? config.PI_PROGRESS_HEARTBEAT_MS;
-    this.longToolMs = options.longToolMs ?? config.PI_PROGRESS_LONG_TOOL_MS;
+    this.debounceMs = options.debounceMs ?? config.KIMI_PROGRESS_DEBOUNCE_MS;
+    this.heartbeatMs = options.heartbeatMs ?? config.KIMI_PROGRESS_HEARTBEAT_MS;
+    this.longToolMs = options.longToolMs ?? config.KIMI_PROGRESS_LONG_TOOL_MS;
     this.nowMs = options.nowMs ?? (() => performance.now());
     this.send = options.send ?? createAgentActivity;
     this.logger = options.logger ?? console;
@@ -306,7 +306,7 @@ export class ProgressReporter {
       this.lastSentAt = Date.now();
       this.lastSentKey = update.dedupeKey;
     } catch (error) {
-      this.logger.error("failed to post pi progress", {
+      this.logger.error("failed to post kimi progress", {
         message: error instanceof Error ? error.message : String(error),
       });
     }

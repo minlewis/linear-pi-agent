@@ -8,13 +8,13 @@ before(() => {
   process.env.LINEAR_WEBHOOK_SECRET = "webhook";
   process.env.LINEAR_REDIRECT_URI = "https://example.com/linear/oauth/callback";
   process.env.BASE_URL = "https://example.com";
-  process.env.PI_WORKDIR = "/tmp";
+  process.env.KIMI_WORKDIR = "/tmp";
 });
 
 afterEach(() => {
-  delete process.env.PI_PROGRESS_DEBOUNCE_MS;
-  delete process.env.PI_PROGRESS_HEARTBEAT_MS;
-  delete process.env.PI_PROGRESS_LONG_TOOL_MS;
+  delete process.env.KIMI_PROGRESS_DEBOUNCE_MS;
+  delete process.env.KIMI_PROGRESS_HEARTBEAT_MS;
+  delete process.env.KIMI_PROGRESS_LONG_TOOL_MS;
 });
 
 function sleep(ms: number): Promise<void> {

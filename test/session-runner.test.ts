@@ -7,7 +7,7 @@ before(() => {
   process.env.LINEAR_WEBHOOK_SECRET = "webhook";
   process.env.LINEAR_REDIRECT_URI = "https://example.com/linear/oauth/callback";
   process.env.BASE_URL = "https://example.com";
-  process.env.PI_WORKDIR = "/tmp";
+  process.env.KIMI_WORKDIR = "/tmp";
 });
 
 async function sessionRunnerModule() {

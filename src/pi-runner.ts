@@ -16,7 +16,8 @@ export const MAX_LINEAR_BODY_CHARS = 8_000;
 // Some installed pi extensions render background widgets even when pi is used
 // through the SDK. Initialize the global theme so those non-interactive hooks
 // do not crash the Linear service with "Theme not initialized".
-initTheme(config.PI_THEME, false);
+// TODO(kimi-migration): pi-runner is deleted in slice 4; this file is throwaway.
+initTheme("light", false);
 
 export type PiRunResult = {
   exitCode: number | null;
@@ -137,11 +138,11 @@ async function getSdkSession(agentSessionId: string, reporter: ProgressReporter)
     return existing;
   }
 
-  const sessionDir = path.resolve(config.PI_SESSION_DIR);
+  const sessionDir = path.resolve("./data/pi-sessions");
   await mkdir(sessionDir, { recursive: true });
   const sessionFile = path.join(sessionDir, `${agentSessionId}.jsonl`);
-  const sessionManager = SessionManager.open(sessionFile, sessionDir, config.PI_WORKDIR);
-  const { session } = await createAgentSession({ cwd: config.PI_WORKDIR, sessionManager });
+  const sessionManager = SessionManager.open(sessionFile, sessionDir, config.KIMI_WORKDIR);
+  const { session } = await createAgentSession({ cwd: config.KIMI_WORKDIR, sessionManager });
 
   const reporterRef = { current: reporter };
   const unsubscribe = session.subscribe((event) => handleSdkEvent(event, reporterRef.current));
@@ -161,10 +162,6 @@ function disposeSdkSession(agentSessionId: string): void {
 }
 
 export async function runPi(payload: AgentSessionWebhook): Promise<PiRunResult> {
-  if (config.PI_RUNNER === "cli") {
-    throw new Error("CLI pi runner fallback was removed from this build path; set PI_RUNNER=sdk or restore the legacy runner.");
-  }
-
   const agentSessionId = payload.agentSession?.id;
   if (!agentSessionId) throw new Error("agentSession.id is required to run pi");
 
@@ -192,7 +189,7 @@ export async function runPi(payload: AgentSessionWebhook): Promise<PiRunResult> 
         timeout = setTimeout(() => {
           timedOut = true;
           reject(new Error("pi timed out"));
-        }, config.PI_TIMEOUT_MS);
+        }, config.KIMI_TIMEOUT_MS);
         timeout.unref();
       }),
     ]);
